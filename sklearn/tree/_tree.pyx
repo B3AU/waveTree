@@ -804,6 +804,7 @@ cdef class Splitter:
         self.min_samples_leaf = min_samples_leaf
         self.random_state = random_state
 
+
     def __dealloc__(self):
         """Destructor."""
         free(self.samples)
@@ -824,6 +825,7 @@ cdef class Splitter:
             free(self.samples)
         if self.features != NULL:
             free(self.features)
+
 
         # Reset random state
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
@@ -884,6 +886,131 @@ cdef class Splitter:
         """Copy the value of node samples[start:end] into dest."""
         self.criterion.node_value(dest)
 
+cdef class WaveSplitter(Splitter):
+    """Splitter for finding the best split, limited by feature_mask"""
+    def __reduce__(self):
+        return (WaveSplitter, (self.criterion,
+                               self.max_features,
+                               self.min_samples_leaf,
+                               self.random_state), self.__getstate__())
+
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+
+        """Find the best split on node samples[start:end]."""
+        # Find the best split
+        cdef Criterion criterion = self.criterion
+        cdef SIZE_t* samples = self.samples
+        cdef SIZE_t start = self.start
+        cdef SIZE_t end = self.end
+
+        cdef SIZE_t* features = self.features
+        cdef SIZE_t n_features = self.n_features
+
+        cdef np.ndarray[DTYPE_t, ndim=2, mode="c"] X = self.X
+        cdef SIZE_t max_features = self.max_features
+        cdef SIZE_t min_samples_leaf = self.min_samples_leaf
+        cdef UINT32_t* random_state = &self.rand_r_state
+
+        cdef double best_impurity = INFINITY
+        cdef SIZE_t best_pos = end
+        cdef SIZE_t best_feature
+        cdef double best_threshold
+
+        cdef double current_impurity
+        cdef SIZE_t current_pos
+        cdef SIZE_t current_feature
+        cdef double current_threshold
+
+        cdef SIZE_t f_idx, f_i, f_j, p, tmp
+        cdef SIZE_t visited_features = 0
+
+        cdef SIZE_t partition_start
+        cdef SIZE_t partition_end
+
+        for f_idx from 0 <= f_idx < n_features:
+            # Draw a feature at random
+            f_i = n_features - f_idx - 1
+            f_j = rand_int(n_features - f_idx, random_state)
+
+            tmp = features[f_i]
+            features[f_i] = features[f_j]
+            features[f_j] = tmp
+
+            current_feature = features[f_i]
+
+            # Sort samples along that feature
+            sort(X, current_feature, samples+start, end-start)
+
+            # Evaluate all splits
+            criterion.reset()
+            p = start
+
+            while p < end:
+                while ((p + 1 < end) and
+                       (X[samples[p + 1], current_feature] <=
+                        X[samples[p], current_feature] + 1e-7)):
+                    p += 1
+
+                # (p + 1 >= end) or (X[samples[p + 1], current_feature] >
+                #                    X[samples[p], current_feature])
+                p += 1
+                # (p >= end) or (X[samples[p], current_feature] >
+                #                X[samples[p - 1], current_feature])
+
+                if p < end:
+                    current_pos = p
+
+                    # Reject if min_samples_leaf is not guaranteed
+                    if (((current_pos - start) < min_samples_leaf) or
+                        ((end - current_pos) < min_samples_leaf)):
+                       continue
+
+                    criterion.update(current_pos)
+                    current_impurity = criterion.children_impurity()
+
+                    if current_impurity < (best_impurity - 1e-7):
+                        best_impurity = current_impurity
+                        best_pos = current_pos
+                        best_feature = current_feature
+
+                        current_threshold = (X[samples[p - 1], current_feature] +
+                                             X[samples[p], current_feature]) / 2.0
+
+                        if current_threshold == X[samples[p], current_feature]:
+                            current_threshold = X[samples[p - 1], current_feature]
+
+                        best_threshold = current_threshold
+
+            if best_pos == end: # No valid split was ever found
+                continue
+
+            # Count one more visited feature
+            visited_features += 1
+
+            if visited_features >= max_features:
+                break
+
+        # Reorganize into samples[start:best_pos] + samples[best_pos:end]
+        if best_pos < end:
+            partition_start = start
+            partition_end = end
+            p = start
+
+            while p < partition_end:
+                if X[samples[p], best_feature] <= best_threshold:
+                    p += 1
+
+                else:
+                    partition_end -= 1
+
+                    tmp = samples[partition_end]
+                    samples[partition_end] = samples[p]
+                    samples[p] = tmp
+
+        # Return values
+        pos[0] = best_pos
+        feature[0] = best_feature
+        threshold[0] = best_threshold
 
 cdef class BestSplitter(Splitter):
     """Splitter for finding the best split."""
@@ -1054,6 +1181,7 @@ cdef void sort(np.ndarray[DTYPE_t, ndim=2, mode="c"] X, SIZE_t current_feature,
 
 cdef class RandomSplitter(Splitter):
     """Splitter for finding the best random split."""
+
     def __reduce__(self):
         return (RandomSplitter, (self.criterion,
                                  self.max_features,
@@ -1673,6 +1801,7 @@ cdef class Tree:
                       np.ndarray y,
                       np.ndarray sample_weight=None):
         """Build a decision tree from the training set (X, y)."""
+        print "Building tree!"
         # Prepare data before recursive partitioning
         if X.dtype != DTYPE or not X.flags.contiguous:
             X = np.asarray(X, dtype=DTYPE, order="C")

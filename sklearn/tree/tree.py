@@ -33,7 +33,7 @@ from . import _tree
 __all__ = ["DecisionTreeClassifier",
            "DecisionTreeRegressor",
            "ExtraTreeClassifier",
-           "ExtraTreeRegressor"]
+           "ExtraTreeRegressor",]
 
 
 # =============================================================================
@@ -46,6 +46,7 @@ DOUBLE = _tree.DOUBLE
 CRITERIA_CLF = {"gini": _tree.Gini, "entropy": _tree.Entropy}
 CRITERIA_REG = {"mse": _tree.MSE}
 SPLITTERS = {"best": _tree.BestSplitter,
+             "wave": _tree.WaveSplitter,
              "presort-best": _tree.PresortBestSplitter,
              "random": _tree.RandomSplitter}
 
@@ -233,7 +234,6 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             else:
                 criterion = CRITERIA_REG[self.criterion](self.n_outputs_)
 
-        splitter = self.splitter
         if not isinstance(self.splitter, Splitter):
             splitter = SPLITTERS[self.splitter](criterion,
                                                 self.max_features_,
@@ -246,6 +246,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                           random_state)
 
         self.tree_.build(X, y, sample_weight=sample_weight)
+        print self.tree_.random_check
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
@@ -331,7 +332,6 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
 # =============================================================================
 # Public estimators
 # =============================================================================
-
 class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
     """A decision tree classifier.
 
