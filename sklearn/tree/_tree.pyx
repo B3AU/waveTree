@@ -886,8 +886,55 @@ cdef class Splitter:
         """Copy the value of node samples[start:end] into dest."""
         self.criterion.node_value(dest)
 
+
+cdef class featureMask:
+    cdef np.ndarray mask
+
+    def __init__(self,n_features=None):
+        print "featureMask init"
+        self.mask = np.array([0]*n_features)
+        self.mask[0]=1
+
+        if not ((n_features & (n_features - 1)) == 0) and n_features > 0:
+            print "n_features not a power of 2"
+        #self.selection_count = [0]*n_features
+
+    def update(self,selected_feature_idx):
+        assert self.mask[selected_feature_idx]==1 #check if update allowed by mask
+        #self.selection_count[selected_feature_idx]+=1
+
+        if selected_feature_idx*2+1<len(self.mask):#check for not leaf
+            self.mask[selected_feature_idx*2]=1#LC
+            self.mask[selected_feature_idx*2+1]=1#RC
+
+    def validIdxs(self):
+        return np.where(self.mask == 1)[0]
+
+
+
 cdef class WaveSplitter(Splitter):
     """Splitter for finding the best split, limited by feature_mask"""
+    cdef int counter
+    cdef featureMask feature_mask
+
+    def __cinit__(self, Criterion criterion,
+                        SIZE_t max_features,
+                        SIZE_t min_samples_leaf,
+                        object random_state):
+        # Initialize pointers
+        self.counter = 0
+
+
+
+        self.feature_mask = featureMask(max_features)
+
+
+    #def __dealloc__(self):
+    #    """Destructor."""
+    #    free(self.counter)
+
+
+
     def __reduce__(self):
         return (WaveSplitter, (self.criterion,
                                self.max_features,
@@ -895,7 +942,8 @@ cdef class WaveSplitter(Splitter):
                                self.random_state), self.__getstate__())
 
     cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
-
+        self.counter+=1
+        print self.feature_mask.mask
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -927,16 +975,9 @@ cdef class WaveSplitter(Splitter):
         cdef SIZE_t partition_start
         cdef SIZE_t partition_end
 
-        for f_idx from 0 <= f_idx < n_features:
-            # Draw a feature at random
-            f_i = n_features - f_idx - 1
-            f_j = rand_int(n_features - f_idx, random_state)
 
-            tmp = features[f_i]
-            features[f_i] = features[f_j]
-            features[f_j] = tmp
-
-            current_feature = features[f_i]
+        for f_idx in self.feature_mask.validIdxs():
+            current_feature = features[f_idx]
 
             # Sort samples along that feature
             sort(X, current_feature, samples+start, end-start)
@@ -1011,6 +1052,10 @@ cdef class WaveSplitter(Splitter):
         pos[0] = best_pos
         feature[0] = best_feature
         threshold[0] = best_threshold
+
+        print "best feature:"
+        print best_feature
+        self.feature_mask.update(best_feature)
 
 cdef class BestSplitter(Splitter):
     """Splitter for finding the best split."""

@@ -246,7 +246,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                           random_state)
 
         self.tree_.build(X, y, sample_weight=sample_weight)
-        print self.tree_.random_check
+
 
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
