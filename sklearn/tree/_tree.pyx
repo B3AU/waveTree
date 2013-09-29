@@ -17,6 +17,7 @@ from libc.string cimport memcpy
 from libc.math cimport log as ln
 
 import numpy as np
+import copy
 cimport numpy as np
 np.import_array()
 
@@ -878,7 +879,7 @@ cdef class Splitter:
 
         impurity[0] =  criterion.node_impurity()
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
         """Find a split on node samples[start:end]."""
         pass
 
@@ -915,7 +916,6 @@ cdef class featureMask:
 cdef class WaveSplitter(Splitter):
     """Splitter for finding the best split, limited by feature_mask"""
     cdef int counter
-    cdef featureMask feature_mask
 
     def __cinit__(self, Criterion criterion,
                         SIZE_t max_features,
@@ -923,10 +923,7 @@ cdef class WaveSplitter(Splitter):
                         object random_state):
         # Initialize pointers
         self.counter = 0
-
-
-
-        self.feature_mask = featureMask(max_features)
+        self.feature_mask = featureMask(max_features)#TODO: len(features)
 
 
     #def __dealloc__(self):
@@ -941,9 +938,9 @@ cdef class WaveSplitter(Splitter):
                                self.min_samples_leaf,
                                self.random_state), self.__getstate__())
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
         self.counter+=1
-        print self.feature_mask.mask
+        print feature_mask.mask
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -976,7 +973,7 @@ cdef class WaveSplitter(Splitter):
         cdef SIZE_t partition_end
 
 
-        for f_idx in self.feature_mask.validIdxs():
+        for f_idx in feature_mask.validIdxs():#TODO: fast cython loop?
             current_feature = features[f_idx]
 
             # Sort samples along that feature
@@ -1055,7 +1052,7 @@ cdef class WaveSplitter(Splitter):
 
         print "best feature:"
         print best_feature
-        self.feature_mask.update(best_feature)
+        feature_mask.update(best_feature)
 
 cdef class BestSplitter(Splitter):
     """Splitter for finding the best split."""
@@ -1065,7 +1062,8 @@ cdef class BestSplitter(Splitter):
                                self.min_samples_leaf,
                                self.random_state), self.__getstate__())
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
+
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -1233,7 +1231,7 @@ cdef class RandomSplitter(Splitter):
                                  self.min_samples_leaf,
                                  self.random_state), self.__getstate__())
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
         """Find the best random split on node samples[start:end]."""
         # Draw random splits and pick the best
         cdef Criterion criterion = self.criterion
@@ -1407,7 +1405,7 @@ cdef class PresortBestSplitter(Splitter):
             self.sample_mask = \
                 <SIZE_t*> malloc(self.n_total_samples * sizeof(SIZE_t))
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -1876,15 +1874,19 @@ cdef class Tree:
         cdef Splitter splitter = self.splitter
         splitter.init(X, y, sample_weight_ptr)
 
-        cdef SIZE_t stack_n_values = 5
-        cdef SIZE_t stack_capacity = 50
+        cdef featureMask feature_mask = featureMask(X.shape[1])
+
+
+        cdef SIZE_t stack_n_values = 6
+        cdef SIZE_t stack_capacity = 60
         cdef SIZE_t* stack = <SIZE_t*> malloc(stack_capacity * sizeof(SIZE_t))
 
-        stack[0] = 0                    # start
-        stack[1] = splitter.n_samples   # end
-        stack[2] = 0                    # depth
-        stack[3] = _TREE_UNDEFINED      # parent
-        stack[4] = 0                    # is_left
+        stack[0] = 0                       # start
+        stack[1] = splitter.n_samples      # end
+        stack[2] = 0                       # depth
+        stack[3] = _TREE_UNDEFINED         # parent
+        stack[4] = 0                       # is_left
+        stack[5] = feature_mask # is_left
 
         cdef SIZE_t start
         cdef SIZE_t end
@@ -1899,16 +1901,19 @@ cdef class Tree:
         cdef double impurity
         cdef bint is_leaf
 
+
         cdef SIZE_t node_id
 
         while stack_n_values > 0:
-            stack_n_values -= 5
+            stack_n_values -= 6
 
             start = stack[stack_n_values]
             end = stack[stack_n_values + 1]
             depth = stack[stack_n_values + 2]
             parent = stack[stack_n_values + 3]
             is_left = stack[stack_n_values + 4]
+            feature_mask = stack[stack_n_values + 5]
+
 
             n_node_samples = end - start
             is_leaf = ((depth >= self.max_depth) or
@@ -1919,7 +1924,7 @@ cdef class Tree:
             is_leaf = is_leaf or (impurity < 1e-7)
 
             if not is_leaf:
-                splitter.node_split(&pos, &feature, &threshold)
+                splitter.node_split(&pos, &feature, &threshold,feature_mask)
                 is_leaf = is_leaf or (pos >= end)
 
             node_id = self._add_node(parent, is_left, is_leaf, feature,
@@ -1930,18 +1935,21 @@ cdef class Tree:
                 splitter.node_value(self.value + node_id * self.value_stride)
 
             else:
-                if stack_n_values + 10 > stack_capacity:
+                if stack_n_values + 12 > stack_capacity:
                     stack_capacity *= 2
                     stack = <SIZE_t*> realloc(stack,
                                               stack_capacity * sizeof(SIZE_t))
 
+                fm_l = copy.deepcopy(feature_mask)
+                fm_r = copy.deepcopy(feature_mask)
                 # Stack right child
                 stack[stack_n_values] = pos
                 stack[stack_n_values + 1] = end
                 stack[stack_n_values + 2] = depth + 1
                 stack[stack_n_values + 3] = node_id
                 stack[stack_n_values + 4] = 0
-                stack_n_values += 5
+                stack[stack_n_values + 5] = fm_r
+                stack_n_values += 6
 
                 # Stack left child
                 stack[stack_n_values] = start
@@ -1949,7 +1957,8 @@ cdef class Tree:
                 stack[stack_n_values + 2] = depth + 1
                 stack[stack_n_values + 3] = node_id
                 stack[stack_n_values + 4] = 1
-                stack_n_values += 5
+                stack[stack_n_values + 5] = fm_l
+                stack_n_values += 6
 
         self._resize(self.node_count)
         self.splitter = None # Release memory
