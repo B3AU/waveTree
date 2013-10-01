@@ -90,10 +90,14 @@ cdef class Splitter:
 
     cdef void node_split(self, SIZE_t* pos, # Set to >= end if the node is a leaf
                                SIZE_t* feature,
-                               double* threshold)
+                               double* threshold,
+                               featureMask feature_mask)
 
     cdef void node_value(self, double* dest)
 
+
+cdef class featureMask:
+    cdef public np.ndarray mask
 
 # =============================================================================
 # Tree

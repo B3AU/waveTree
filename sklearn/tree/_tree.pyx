@@ -889,7 +889,6 @@ cdef class Splitter:
 
 
 cdef class featureMask:
-    cdef np.ndarray mask
 
     def __init__(self,n_features=None):
         print "featureMask init"
