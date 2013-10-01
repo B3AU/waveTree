@@ -48,6 +48,7 @@ def configuration(parent_package='', top_path=None):
     config.add_subpackage('semi_supervised')
     config.add_subpackage("tree")
     config.add_subpackage("tree/tests")
+    config.add_subpackage("wavetree")
     config.add_subpackage('metrics/tests')
     config.add_subpackage('metrics/cluster')
     config.add_subpackage('metrics/cluster/tests')
