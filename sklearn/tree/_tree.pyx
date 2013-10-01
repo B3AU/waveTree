@@ -17,7 +17,6 @@ from libc.string cimport memcpy
 from libc.math cimport log as ln
 
 import numpy as np
-import copy
 cimport numpy as np
 np.import_array()
 
@@ -805,7 +804,6 @@ cdef class Splitter:
         self.min_samples_leaf = min_samples_leaf
         self.random_state = random_state
 
-
     def __dealloc__(self):
         """Destructor."""
         free(self.samples)
@@ -826,7 +824,6 @@ cdef class Splitter:
             free(self.samples)
         if self.features != NULL:
             free(self.features)
-
 
         # Reset random state
         self.rand_r_state = self.random_state.randint(0, RAND_R_MAX)
@@ -879,179 +876,13 @@ cdef class Splitter:
 
         impurity[0] =  criterion.node_impurity()
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
         """Find a split on node samples[start:end]."""
         pass
 
     cdef void node_value(self, double* dest):
         """Copy the value of node samples[start:end] into dest."""
         self.criterion.node_value(dest)
-
-
-cdef class featureMask:
-
-    def __init__(self,n_features=None):
-        self.mask = np.array([0]*n_features)
-        self.mask[0]=1
-
-        if not ((n_features & (n_features - 1)) == 0) and n_features > 0:
-            print "n_features not a power of 2"
-        #self.selection_count = [0]*n_features
-
-    def update(self,selected_feature_idx):
-        assert self.mask[selected_feature_idx]==1 #check if update allowed by mask
-        #self.selection_count[selected_feature_idx]+=1
-
-        if selected_feature_idx*2+1<len(self.mask):#check for not leaf
-            self.mask[selected_feature_idx*2]=1#LC
-            self.mask[selected_feature_idx*2+1]=1#RC
-
-    def validIdxs(self):
-        result = np.where(self.mask == 1)[0]
-        return result
-
-
-
-
-cdef class WaveSplitter(Splitter):
-    """Splitter for finding the best split, limited by feature_mask"""
-    cdef int counter
-    def __cinit__(self, Criterion criterion,
-                        SIZE_t max_features,
-                        SIZE_t min_samples_leaf,
-                        object random_state):
-        # Initialize pointers
-        self.counter = 0
-
-
-
-    #def __dealloc__(self):
-    #    """Destructor."""
-    #    free(self.counter)
-
-
-
-    def __reduce__(self):
-        return (WaveSplitter, (self.criterion,
-                               self.max_features,
-                               self.min_samples_leaf,
-                               self.random_state), self.__getstate__())
-
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
-        self.counter+=1
-        print feature_mask.mask
-        """Find the best split on node samples[start:end]."""
-        # Find the best split
-        cdef Criterion criterion = self.criterion
-        cdef SIZE_t* samples = self.samples
-        cdef SIZE_t start = self.start
-        cdef SIZE_t end = self.end
-
-        cdef SIZE_t* features = self.features
-        cdef SIZE_t n_features = self.n_features
-
-        cdef np.ndarray[DTYPE_t, ndim=2, mode="c"] X = self.X
-        cdef SIZE_t max_features = self.max_features
-        cdef SIZE_t min_samples_leaf = self.min_samples_leaf
-        cdef UINT32_t* random_state = &self.rand_r_state
-
-        cdef double best_impurity = INFINITY
-        cdef SIZE_t best_pos = end
-        cdef SIZE_t best_feature
-        cdef double best_threshold
-
-        cdef double current_impurity
-        cdef SIZE_t current_pos
-        cdef SIZE_t current_feature
-        cdef double current_threshold
-
-        cdef SIZE_t f_idx, f_i, f_j, p, tmp
-        cdef SIZE_t visited_features = 0
-
-        cdef SIZE_t partition_start
-        cdef SIZE_t partition_end
-
-
-        for f_idx in feature_mask.validIdxs():
-            current_feature = features[f_idx]
-
-            # Sort samples along that feature
-            sort(X, current_feature, samples+start, end-start)
-
-            # Evaluate all splits
-            criterion.reset()
-            p = start
-
-            while p < end:
-                while ((p + 1 < end) and
-                       (X[samples[p + 1], current_feature] <=
-                        X[samples[p], current_feature] + 1e-7)):
-                    p += 1
-
-                # (p + 1 >= end) or (X[samples[p + 1], current_feature] >
-                #                    X[samples[p], current_feature])
-                p += 1
-                # (p >= end) or (X[samples[p], current_feature] >
-                #                X[samples[p - 1], current_feature])
-
-                if p < end:
-                    current_pos = p
-
-                    # Reject if min_samples_leaf is not guaranteed
-                    if (((current_pos - start) < min_samples_leaf) or
-                        ((end - current_pos) < min_samples_leaf)):
-                       continue
-
-                    criterion.update(current_pos)
-                    current_impurity = criterion.children_impurity()
-
-                    if current_impurity < (best_impurity - 1e-7):
-                        best_impurity = current_impurity
-                        best_pos = current_pos
-                        best_feature = current_feature
-
-                        current_threshold = (X[samples[p - 1], current_feature] +
-                                             X[samples[p], current_feature]) / 2.0
-
-                        if current_threshold == X[samples[p], current_feature]:
-                            current_threshold = X[samples[p - 1], current_feature]
-
-                        best_threshold = current_threshold
-
-            if best_pos == end: # No valid split was ever found
-                continue
-
-            # Count one more visited feature
-            visited_features += 1
-
-            if visited_features >= max_features:
-                break
-
-        # Reorganize into samples[start:best_pos] + samples[best_pos:end]
-        if best_pos < end:
-            partition_start = start
-            partition_end = end
-            p = start
-
-            while p < partition_end:
-                if X[samples[p], best_feature] <= best_threshold:
-                    p += 1
-
-                else:
-                    partition_end -= 1
-
-                    tmp = samples[partition_end]
-                    samples[partition_end] = samples[p]
-                    samples[p] = tmp
-
-        # Return values
-        pos[0] = best_pos
-        feature[0] = best_feature
-        threshold[0] = best_threshold
-
-        print "best feature:"
-        print best_feature
-        feature_mask.update(best_feature)
 
 
 cdef class BestSplitter(Splitter):
@@ -1062,8 +893,7 @@ cdef class BestSplitter(Splitter):
                                self.min_samples_leaf,
                                self.random_state), self.__getstate__())
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
-
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -1224,14 +1054,13 @@ cdef void sort(np.ndarray[DTYPE_t, ndim=2, mode="c"] X, SIZE_t current_feature,
 
 cdef class RandomSplitter(Splitter):
     """Splitter for finding the best random split."""
-
     def __reduce__(self):
         return (RandomSplitter, (self.criterion,
                                  self.max_features,
                                  self.min_samples_leaf,
                                  self.random_state), self.__getstate__())
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
         """Find the best random split on node samples[start:end]."""
         # Draw random splits and pick the best
         cdef Criterion criterion = self.criterion
@@ -1405,7 +1234,7 @@ cdef class PresortBestSplitter(Splitter):
             self.sample_mask = \
                 <SIZE_t*> malloc(self.n_total_samples * sizeof(SIZE_t))
 
-    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold,featureMask feature_mask):
+    cdef void node_split(self, SIZE_t* pos, SIZE_t* feature, double* threshold):
         """Find the best split on node samples[start:end]."""
         # Find the best split
         cdef Criterion criterion = self.criterion
@@ -1844,7 +1673,6 @@ cdef class Tree:
                       np.ndarray y,
                       np.ndarray sample_weight=None):
         """Build a decision tree from the training set (X, y)."""
-        print "Building tree!"
         # Prepare data before recursive partitioning
         if X.dtype != DTYPE or not X.flags.contiguous:
             X = np.asarray(X, dtype=DTYPE, order="C")
@@ -1874,23 +1702,15 @@ cdef class Tree:
         cdef Splitter splitter = self.splitter
         splitter.init(X, y, sample_weight_ptr)
 
-
-
         cdef SIZE_t stack_n_values = 5
         cdef SIZE_t stack_capacity = 50
         cdef SIZE_t* stack = <SIZE_t*> malloc(stack_capacity * sizeof(SIZE_t))
 
-        stack[0] = 0                       # start
-        stack[1] = splitter.n_samples      # end
-        stack[2] = 0                       # depth
-        stack[3] = _TREE_UNDEFINED         # parent
-        stack[4] = 0                       # is_left
-
-
-        #stack with feature mask
-        feature_mask = featureMask(X.shape[1])
-        py_stack = []
-        py_stack.append(feature_mask) # is_left
+        stack[0] = 0                    # start
+        stack[1] = splitter.n_samples   # end
+        stack[2] = 0                    # depth
+        stack[3] = _TREE_UNDEFINED      # parent
+        stack[4] = 0                    # is_left
 
         cdef SIZE_t start
         cdef SIZE_t end
@@ -1905,7 +1725,6 @@ cdef class Tree:
         cdef double impurity
         cdef bint is_leaf
 
-
         cdef SIZE_t node_id
 
         while stack_n_values > 0:
@@ -1917,9 +1736,6 @@ cdef class Tree:
             parent = stack[stack_n_values + 3]
             is_left = stack[stack_n_values + 4]
 
-            feature_mask = py_stack.pop()
-
-
             n_node_samples = end - start
             is_leaf = ((depth >= self.max_depth) or
                        (n_node_samples < self.min_samples_split) or
@@ -1929,7 +1745,7 @@ cdef class Tree:
             is_leaf = is_leaf or (impurity < 1e-7)
 
             if not is_leaf:
-                splitter.node_split(&pos, &feature, &threshold,feature_mask)
+                splitter.node_split(&pos, &feature, &threshold)
                 is_leaf = is_leaf or (pos >= end)
 
             node_id = self._add_node(parent, is_left, is_leaf, feature,
@@ -1940,20 +1756,10 @@ cdef class Tree:
                 splitter.node_value(self.value + node_id * self.value_stride)
 
             else:
-
-
                 if stack_n_values + 10 > stack_capacity:
                     stack_capacity *= 2
                     stack = <SIZE_t*> realloc(stack,
                                               stack_capacity * sizeof(SIZE_t))
-
-
-
-                fm_l = featureMask(2)
-                fm_r = featureMask(2)
-                fm_l.mask = np.copy(feature_mask.mask)
-                fm_r.mask = np.array(len(feature_mask.mask)*[1])
-
 
                 # Stack right child
                 stack[stack_n_values] = pos
@@ -1963,8 +1769,6 @@ cdef class Tree:
                 stack[stack_n_values + 4] = 0
                 stack_n_values += 5
 
-                py_stack.append(fm_l)
-
                 # Stack left child
                 stack[stack_n_values] = start
                 stack[stack_n_values + 1] = pos
@@ -1972,9 +1776,6 @@ cdef class Tree:
                 stack[stack_n_values + 3] = node_id
                 stack[stack_n_values + 4] = 1
                 stack_n_values += 5
-
-                py_stack.append(fm_r)
-
 
         self._resize(self.node_count)
         self.splitter = None # Release memory
